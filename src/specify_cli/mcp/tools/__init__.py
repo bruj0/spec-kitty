@@ -6,14 +6,14 @@ Each tool handles parameter validation, routing to CLI adapters, and
 response serialization.
 """
 
-from .feature_tools import (
-    feature_operations_handler,
-    FEATURE_OPERATIONS_SCHEMA,
-    FeatureOperation
+from .task_tools import (
+    register_task_operations_tool,
+    task_operations_handler,
+    TASK_OPERATIONS_SCHEMA,
 )
 
 __all__ = [
-    "feature_operations_handler",
-    "FEATURE_OPERATIONS_SCHEMA",
-    "FeatureOperation"
+    "register_task_operations_tool",
+    "task_operations_handler",
+    "TASK_OPERATIONS_SCHEMA",
 ]

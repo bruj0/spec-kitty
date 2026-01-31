@@ -68,9 +68,6 @@ class MCPServer:
         
         # Initialize FastMCP app
         self._app = FastMCP("Spec Kitty MCP Server")
-        
-        # Register all MCP tools
-        self._register_tools()
     
     def _check_port_available(self, host: str, port: int) -> bool:
         """
@@ -146,25 +143,3 @@ class MCPServer:
         # FastMCP uses decorators, but we'll register programmatically
         # This will be expanded in WP02 when implementing actual tools
         self._app.tool(name=name, description=description)(handler)
-    
-    def _register_tools(self):
-        """
-        Register all MCP tools with the FastMCP server.
-        
-        This method imports and registers tool handlers for all supported
-        operations. Tools are registered during server initialization.
-        """
-        from specify_cli.mcp.tools import (
-            feature_operations_handler,
-            FEATURE_OPERATIONS_SCHEMA
-        )
-        
-        # Register feature operations tool
-        self._app.tool(
-            name="feature_operations",
-            description=(
-                "Execute feature workflow operations (specify, plan, tasks, "
-                "implement, review, accept) for Spec Kitty projects. "
-                "Provides conversational access to the complete feature lifecycle."
-            )
-        )(feature_operations_handler)
