@@ -20,6 +20,7 @@ from .task_tools import (
     task_operations_handler,
     TASK_OPERATIONS_SCHEMA,
 )
+from .workspace_tools import workspace_operations
 
 __all__ = [
     "SYSTEM_OPERATIONS_SCHEMA",
@@ -30,4 +31,5 @@ __all__ = [
     "register_task_operations_tool",
     "task_operations_handler",
     "TASK_OPERATIONS_SCHEMA",
+    "workspace_operations",
 ]

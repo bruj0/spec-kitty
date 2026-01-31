@@ -90,6 +90,20 @@ class MCPServer:
         except OSError:
             return False
     
+<<<<<<< HEAD
+=======
+    def _register_tools(self):
+        """Register all MCP tools with the server."""
+        from specify_cli.mcp.tools import workspace_operations
+        
+        # Register workspace operations tool
+        self.register_tool(
+            name="workspace_operations",
+            description="Create and manage git worktrees for work packages",
+            handler=workspace_operations
+        )
+    
+>>>>>>> 099-mcp-server-for-conversational-spec-kitty-workflow-WP07
     def start(self):
         """
         Start the MCP server with configured transport.
@@ -158,11 +172,13 @@ class MCPServer:
         - system_operations: Health checks, validation, configuration
         - feature_operations: Feature workflow operations (specify, plan, tasks, etc.)
         - task_operations: Task and work package management operations
+        - workspace_operations: Git worktree creation and management
         """
         from specify_cli.mcp.tools import (
             system_operations_handler,
             feature_operations_handler,
             register_task_operations_tool,
+            workspace_operations,
             FEATURE_OPERATIONS_SCHEMA
         )
         
@@ -200,3 +216,10 @@ class MCPServer:
         
         # Register task operations tool
         register_task_operations_tool(self._app)
+        
+        # Register workspace operations tool
+        self.register_tool(
+            name="workspace_operations",
+            description="Create and manage git worktrees for work packages",
+            handler=workspace_operations
+        )
