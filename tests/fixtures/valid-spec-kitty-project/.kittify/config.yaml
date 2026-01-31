@@ -1,0 +1,7 @@
+project_name: test-project
+mission: software-dev
+version: 0.13.0
+agents:
+  available:
+    - claude
+    - cursor
