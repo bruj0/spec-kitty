@@ -6,14 +6,6 @@ Each tool handles parameter validation, routing to CLI adapters, and
 response serialization.
 """
 
-from .task_tools import (
-    register_task_operations_tool,
-    task_operations_handler,
-    TASK_OPERATIONS_SCHEMA,
-)
+from .workspace_tools import workspace_operations
 
-__all__ = [
-    "register_task_operations_tool",
-    "task_operations_handler",
-    "TASK_OPERATIONS_SCHEMA",
-]
+__all__ = ["workspace_operations"]

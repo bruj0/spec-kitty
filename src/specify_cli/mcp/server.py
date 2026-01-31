@@ -68,6 +68,9 @@ class MCPServer:
         
         # Initialize FastMCP app
         self._app = FastMCP("Spec Kitty MCP Server")
+        
+        # Register all MCP tools
+        self._register_tools()
     
     def _check_port_available(self, host: str, port: int) -> bool:
         """
@@ -86,6 +89,17 @@ class MCPServer:
                 return True
         except OSError:
             return False
+    
+    def _register_tools(self):
+        """Register all MCP tools with the server."""
+        from specify_cli.mcp.tools import workspace_operations
+        
+        # Register workspace operations tool
+        self.register_tool(
+            name="workspace_operations",
+            description="Create and manage git worktrees for work packages",
+            handler=workspace_operations
+        )
     
     def start(self):
         """
