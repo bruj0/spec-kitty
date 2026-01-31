@@ -1,11 +1,8 @@
-"""Session management for MCP server conversations."""
+"""
+Conversation state and project context management.
 
-from .context import ProjectContext
-from .state import ConversationState
-from .persistence import atomic_write
+Handles session persistence for multi-turn discovery interviews, project
+context tracking, and resource locking for concurrent operations.
+"""
 
-__all__ = [
-    "ProjectContext",
-    "ConversationState",
-    "atomic_write",
-]
+__all__ = []

@@ -1,5 +1,6 @@
 """MCP server management commands."""
 
+import logging
 import typer
 from rich.console import Console
 
@@ -7,6 +8,12 @@ from specify_cli.mcp.server import MCPServer
 
 app = typer.Typer(help="MCP server management")
 console = Console()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 
 
 @app.command()
@@ -43,8 +50,14 @@ def start(
         console.print(f"Transport: {transport}")
         if transport == "sse":
             console.print(f"Listening on {host}:{port}")
+        
+        # Enhanced authentication status logging
         if auth:
-            console.print("[yellow]Authentication enabled[/yellow]")
+            console.print("[yellow]✓ Authentication enabled[/yellow]")
+            console.print("[dim]Clients must provide valid API key to connect[/dim]")
+        else:
+            console.print("[blue]ℹ Authentication disabled (local trusted mode)[/blue]")
+            console.print("[dim]All local clients trusted without API key[/dim]")
         
         console.print("\n[dim]Press Ctrl+C to stop server[/dim]\n")
         

@@ -5,6 +5,7 @@ Main server class that handles MCP protocol communication, configuration,
 and tool registration. Supports both stdio and SSE transports.
 """
 
+import logging
 import os
 import socket
 from dataclasses import dataclass, field
@@ -12,6 +13,10 @@ from pathlib import Path
 from typing import Dict, Literal, Optional
 
 from fastmcp import FastMCP
+
+from specify_cli.mcp.auth import AuthMiddlewareManager
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -38,6 +43,7 @@ class MCPServer:
     api_key: Optional[str] = None
     active_projects: Dict[str, "ProjectContext"] = field(default_factory=dict)
     _app: Optional[FastMCP] = field(default=None, init=False, repr=False)
+    _auth_manager: Optional[AuthMiddlewareManager] = field(default=None, init=False, repr=False)
     
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -66,11 +72,14 @@ class MCPServer:
                     "Must be an integer."
                 )
         
+        # Initialize authentication manager
+        self._auth_manager = AuthMiddlewareManager(
+            api_key=self.api_key,
+            enabled=self.auth_enabled,
+        )
+        
         # Initialize FastMCP app
         self._app = FastMCP("Spec Kitty MCP Server")
-        
-        # Register all MCP tools
-        self._register_tools()
     
     def _check_port_available(self, host: str, port: int) -> bool:
         """
@@ -100,12 +109,17 @@ class MCPServer:
         if not self._app:
             raise RuntimeError("FastMCP app not initialized. This should not happen.")
         
+        # Log authentication status
+        if self._auth_manager:
+            self._auth_manager.log_status(logger)
+        
         if self.transport == "stdio":
             # Stdio transport:
             # - Used by Claude Desktop, Cursor, and other local MCP clients
             # - Communicates via stdin/stdout (JSON-RPC messages)
             # - No network binding required (host/port ignored)
             # - Ideal for trusted local development environments
+            logger.info("Starting MCP server with stdio transport")
             try:
                 self._app.run()  # STDIO is the default transport
             except Exception as e:
@@ -124,6 +138,7 @@ class MCPServer:
                     f"Choose a different port or stop the conflicting service."
                 )
             
+            logger.info(f"Starting MCP server with SSE transport on {self.host}:{self.port}")
             try:
                 self._app.run(transport="sse", host=self.host, port=self.port)
             except Exception as e:
@@ -135,6 +150,8 @@ class MCPServer:
         """
         Register an MCP tool with the server.
         
+        Automatically applies authentication middleware if auth is enabled.
+        
         Args:
             name: Tool name (e.g., "feature_operations")
             description: Human-readable tool description
@@ -143,37 +160,21 @@ class MCPServer:
         if not self._app:
             raise RuntimeError("FastMCP app not initialized")
         
+        # Apply authentication middleware if enabled
+        if self._auth_manager:
+            handler = self._auth_manager.protect(handler)
+        
         # FastMCP uses decorators, but we'll register programmatically
         # This will be expanded in WP02 when implementing actual tools
         self._app.tool(name=name, description=description)(handler)
     
-    def _register_tools(self):
+    def get_auth_middleware(self):
         """
-        Register all MCP tools with the server.
+        Get the authentication middleware manager.
         
-        Tools are organized by domain:
-        - system_operations: Health checks, validation, configuration
+        Returns:
+            AuthMiddlewareManager instance
         """
-        from specify_cli.mcp.tools import system_operations_handler
-        
-        # System operations tool
-        def system_operations_tool(
-            operation: str,
-            project_path: Optional[str] = None
-        ):
-            """
-            System-level operations: health checks, project validation, mission listing.
-            
-            Operations:
-            - health_check: Return server status, uptime, active projects count
-            - validate_project: Check project structure and required files
-            - list_missions: List available Spec Kitty missions
-            - server_config: Return server configuration (API key redacted)
-            """
-            return system_operations_handler(
-                operation=operation,
-                project_path=project_path,
-                server_instance=self
-            )
-        
-        self._app.tool(name="system_operations")(system_operations_tool)
+        if not self._auth_manager:
+            raise RuntimeError("Auth manager not initialized")
+        return self._auth_manager
