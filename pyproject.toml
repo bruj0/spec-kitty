@@ -116,3 +116,8 @@ markers = [
     "platform_linux: Linux-specific tests",
     "requires_symlinks: Tests that need symlink support",
 ]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.0.2"
+pytest-asyncio = "^1.3.0"
+

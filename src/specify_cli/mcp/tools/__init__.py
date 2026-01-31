@@ -10,8 +10,16 @@ from .system_tools import (
     SYSTEM_OPERATIONS_SCHEMA,
     system_operations_handler,
 )
+from .feature_tools import (
+    feature_operations_handler,
+    FEATURE_OPERATIONS_SCHEMA,
+    FeatureOperation
+)
 
 __all__ = [
     "SYSTEM_OPERATIONS_SCHEMA",
     "system_operations_handler",
+    "feature_operations_handler",
+    "FEATURE_OPERATIONS_SCHEMA",
+    "FeatureOperation"
 ]
