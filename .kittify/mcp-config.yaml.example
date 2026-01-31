@@ -1,0 +1,59 @@
+# MCP Server Configuration
+# 
+# This file configures the Spec Kitty MCP (Model Context Protocol) server.
+# Place this file in `.kittify/mcp-config.yaml` in your project root.
+#
+# Configuration precedence (highest to lowest):
+#   1. Environment variables (MCP_SERVER_*)
+#   2. Command-line options (--host, --port, etc.)
+#   3. This configuration file
+#   4. Built-in defaults
+
+# Server bind address (used for SSE transport only)
+# Default: "127.0.0.1"
+# Environment variable: MCP_SERVER_HOST
+host: "127.0.0.1"
+
+# Server port (used for SSE transport only)
+# Default: 8000
+# Environment variable: MCP_SERVER_PORT
+port: 8000
+
+# Transport mode:
+#   - "stdio": Standard input/output (for Claude Desktop, Cursor)
+#   - "sse": Server-Sent Events over HTTP (for web-based clients)
+# Default: "stdio"
+# Environment variable: MCP_SERVER_TRANSPORT
+transport: "stdio"
+
+# Enable API key authentication
+# Default: false
+# Environment variable: MCP_SERVER_AUTH_ENABLED (true/false)
+auth_enabled: false
+
+# API key for authentication (if auth_enabled is true)
+# SECURITY: Do NOT store API keys in this file!
+# Use environment variable MCP_SERVER_API_KEY instead.
+# This field is ignored when loading config (for security).
+# api_key: "DO_NOT_STORE_HERE"
+
+# Examples:
+#
+# Example 1: Local development with stdio (default)
+# host: "127.0.0.1"
+# port: 8000
+# transport: "stdio"
+# auth_enabled: false
+#
+# Example 2: Network-accessible server with SSE
+# host: "0.0.0.0"
+# port: 9000
+# transport: "sse"
+# auth_enabled: true
+# (Set MCP_SERVER_API_KEY environment variable)
+#
+# Example 3: Custom port for SSE
+# host: "127.0.0.1"
+# port: 7000
+# transport: "sse"
+# auth_enabled: false
