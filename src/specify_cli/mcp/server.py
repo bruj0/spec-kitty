@@ -157,10 +157,12 @@ class MCPServer:
         Tools are organized by domain:
         - system_operations: Health checks, validation, configuration
         - feature_operations: Feature workflow operations (specify, plan, tasks, etc.)
+        - task_operations: Task and work package management operations
         """
         from specify_cli.mcp.tools import (
             system_operations_handler,
             feature_operations_handler,
+            register_task_operations_tool,
             FEATURE_OPERATIONS_SCHEMA
         )
         
@@ -195,3 +197,6 @@ class MCPServer:
                 "Provides conversational access to the complete feature lifecycle."
             )
         )(feature_operations_handler)
+        
+        # Register task operations tool
+        register_task_operations_tool(self._app)

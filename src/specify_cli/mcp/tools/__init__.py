@@ -15,11 +15,19 @@ from .feature_tools import (
     FEATURE_OPERATIONS_SCHEMA,
     FeatureOperation
 )
+from .task_tools import (
+    register_task_operations_tool,
+    task_operations_handler,
+    TASK_OPERATIONS_SCHEMA,
+)
 
 __all__ = [
     "SYSTEM_OPERATIONS_SCHEMA",
     "system_operations_handler",
     "feature_operations_handler",
     "FEATURE_OPERATIONS_SCHEMA",
-    "FeatureOperation"
+    "FeatureOperation",
+    "register_task_operations_tool",
+    "task_operations_handler",
+    "TASK_OPERATIONS_SCHEMA",
 ]
