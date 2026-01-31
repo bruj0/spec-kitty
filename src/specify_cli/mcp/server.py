@@ -5,6 +5,7 @@ Main server class that handles MCP protocol communication, configuration,
 and tool registration. Supports both stdio and SSE transports.
 """
 
+import logging
 import os
 import socket
 from dataclasses import dataclass, field
@@ -12,6 +13,10 @@ from pathlib import Path
 from typing import Dict, Literal, Optional
 
 from fastmcp import FastMCP
+
+from specify_cli.mcp.auth import AuthMiddlewareManager
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -38,6 +43,7 @@ class MCPServer:
     api_key: Optional[str] = None
     active_projects: Dict[str, "ProjectContext"] = field(default_factory=dict)
     _app: Optional[FastMCP] = field(default=None, init=False, repr=False)
+    _auth_manager: Optional[AuthMiddlewareManager] = field(default=None, init=False, repr=False)
     
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -65,6 +71,12 @@ class MCPServer:
                     f"Invalid MCP_SERVER_PORT: {os.environ['MCP_SERVER_PORT']}. "
                     "Must be an integer."
                 )
+        
+        # Initialize authentication manager
+        self._auth_manager = AuthMiddlewareManager(
+            api_key=self.api_key,
+            enabled=self.auth_enabled,
+        )
         
         # Initialize FastMCP app
         self._app = FastMCP("Spec Kitty MCP Server")
@@ -97,12 +109,17 @@ class MCPServer:
         if not self._app:
             raise RuntimeError("FastMCP app not initialized. This should not happen.")
         
+        # Log authentication status
+        if self._auth_manager:
+            self._auth_manager.log_status(logger)
+        
         if self.transport == "stdio":
             # Stdio transport:
             # - Used by Claude Desktop, Cursor, and other local MCP clients
             # - Communicates via stdin/stdout (JSON-RPC messages)
             # - No network binding required (host/port ignored)
             # - Ideal for trusted local development environments
+            logger.info("Starting MCP server with stdio transport")
             try:
                 self._app.run()  # STDIO is the default transport
             except Exception as e:
@@ -121,6 +138,7 @@ class MCPServer:
                     f"Choose a different port or stop the conflicting service."
                 )
             
+            logger.info(f"Starting MCP server with SSE transport on {self.host}:{self.port}")
             try:
                 self._app.run(transport="sse", host=self.host, port=self.port)
             except Exception as e:
@@ -132,6 +150,8 @@ class MCPServer:
         """
         Register an MCP tool with the server.
         
+        Automatically applies authentication middleware if auth is enabled.
+        
         Args:
             name: Tool name (e.g., "feature_operations")
             description: Human-readable tool description
@@ -140,6 +160,21 @@ class MCPServer:
         if not self._app:
             raise RuntimeError("FastMCP app not initialized")
         
+        # Apply authentication middleware if enabled
+        if self._auth_manager:
+            handler = self._auth_manager.protect(handler)
+        
         # FastMCP uses decorators, but we'll register programmatically
         # This will be expanded in WP02 when implementing actual tools
         self._app.tool(name=name, description=description)(handler)
+    
+    def get_auth_middleware(self):
+        """
+        Get the authentication middleware manager.
+        
+        Returns:
+            AuthMiddlewareManager instance
+        """
+        if not self._auth_manager:
+            raise RuntimeError("Auth manager not initialized")
+        return self._auth_manager

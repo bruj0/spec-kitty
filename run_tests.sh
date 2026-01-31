@@ -8,4 +8,4 @@ cd "$(dirname "$0")"
 export PYTHONPATH="${PWD}/src:${PWD}:${PYTHONPATH}"
 
 # Run tests with explicit path settings
-python -m pytest tests/ "$@"
+python3 -m pytest tests/ "$@"
