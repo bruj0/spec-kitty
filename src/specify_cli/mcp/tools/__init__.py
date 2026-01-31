@@ -6,6 +6,12 @@ Each tool handles parameter validation, routing to CLI adapters, and
 response serialization.
 """
 
-from .workspace_tools import workspace_operations
+from .system_tools import (
+    SYSTEM_OPERATIONS_SCHEMA,
+    system_operations_handler,
+)
 
-__all__ = ["workspace_operations"]
+__all__ = [
+    "SYSTEM_OPERATIONS_SCHEMA",
+    "system_operations_handler",
+]

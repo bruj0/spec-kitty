@@ -90,17 +90,6 @@ class MCPServer:
         except OSError:
             return False
     
-    def _register_tools(self):
-        """Register all MCP tools with the server."""
-        from specify_cli.mcp.tools import workspace_operations
-        
-        # Register workspace operations tool
-        self.register_tool(
-            name="workspace_operations",
-            description="Create and manage git worktrees for work packages",
-            handler=workspace_operations
-        )
-    
     def start(self):
         """
         Start the MCP server with configured transport.
@@ -157,3 +146,34 @@ class MCPServer:
         # FastMCP uses decorators, but we'll register programmatically
         # This will be expanded in WP02 when implementing actual tools
         self._app.tool(name=name, description=description)(handler)
+    
+    def _register_tools(self):
+        """
+        Register all MCP tools with the server.
+        
+        Tools are organized by domain:
+        - system_operations: Health checks, validation, configuration
+        """
+        from specify_cli.mcp.tools import system_operations_handler
+        
+        # System operations tool
+        def system_operations_tool(
+            operation: str,
+            project_path: Optional[str] = None
+        ):
+            """
+            System-level operations: health checks, project validation, mission listing.
+            
+            Operations:
+            - health_check: Return server status, uptime, active projects count
+            - validate_project: Check project structure and required files
+            - list_missions: List available Spec Kitty missions
+            - server_config: Return server configuration (API key redacted)
+            """
+            return system_operations_handler(
+                operation=operation,
+                project_path=project_path,
+                server_instance=self
+            )
+        
+        self._app.tool(name="system_operations")(system_operations_tool)
