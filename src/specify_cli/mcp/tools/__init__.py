@@ -6,4 +6,6 @@ Each tool handles parameter validation, routing to CLI adapters, and
 response serialization.
 """
 
-__all__ = []
+from .workspace_tools import workspace_operations
+
+__all__ = ["workspace_operations"]
