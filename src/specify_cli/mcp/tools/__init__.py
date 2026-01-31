@@ -6,4 +6,14 @@ Each tool handles parameter validation, routing to CLI adapters, and
 response serialization.
 """
 
-__all__ = []
+from .feature_tools import (
+    feature_operations_handler,
+    FEATURE_OPERATIONS_SCHEMA,
+    FeatureOperation
+)
+
+__all__ = [
+    "feature_operations_handler",
+    "FEATURE_OPERATIONS_SCHEMA",
+    "FeatureOperation"
+]
