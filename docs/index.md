@@ -22,6 +22,7 @@ New to Spec Kitty? Start here to learn the fundamentals.
 
 - [Claude Code Integration](tutorials/claude-code-integration.md) — Setup and first run
 - [Claude Code Workflow](tutorials/claude-code-workflow.md) — End-to-end workflow walkthrough
+- [MCP Server Quickstart](tutorials/mcp-server-quickstart.md) — **NEW** Get started with conversational workflows
 
 ### 🔧 How-To Guides — Task-Oriented
 
@@ -29,6 +30,8 @@ Solve specific problems with step-by-step instructions.
 
 - [Install & Upgrade](how-to/install-spec-kitty.md) — Installation methods and upgrades
 - [Use the Dashboard](how-to/use-dashboard.md) — Monitor progress in real-time
+- [MCP Conversational Workflows](how-to/mcp-conversational-workflows.md) — **NEW** Advanced conversational patterns
+- [Troubleshoot MCP Server](how-to/troubleshoot-mcp.md) — **NEW** Solutions to common MCP issues
 - [Upgrade to 0.11.0](how-to/upgrade-to-0-11-0.md) — Migration guide
 - [Non-Interactive Init](how-to/non-interactive-init.md) — Run init without prompts
 
@@ -39,6 +42,8 @@ Complete command and configuration documentation.
 - [CLI Commands](reference/cli-commands.md) — All `spec-kitty` commands
 - [Slash Commands](reference/slash-commands.md) — All `/spec-kitty.*` commands
 - [Agent Subcommands](reference/agent-subcommands.md) — `spec-kitty agent *` commands
+- [MCP Tools](reference/mcp-tools.md) — **NEW** Complete MCP tool reference
+- [MCP Server Configuration](reference/mcp-server-configuration.md) — **NEW** Server configuration options
 - [Configuration](reference/configuration.md) — Config files and options
 - [Environment Variables](reference/environment-variables.md) — All env vars
 - [File Structure](reference/file-structure.md) — Directory layout
@@ -50,6 +55,7 @@ Complete command and configuration documentation.
 Understand the concepts and architecture.
 
 - [Spec-Driven Development](explanation/spec-driven-development.md) — The philosophy
+- [MCP Server Architecture](explanation/mcp-server-architecture.md) — **NEW** How the MCP server works
 - [Workspace-per-WP Model](explanation/workspace-per-wp.md) — How workspaces work
 - [Git Worktrees](explanation/git-worktrees.md) — Git worktrees explained
 - [Mission System](explanation/mission-system.md) — Why missions exist

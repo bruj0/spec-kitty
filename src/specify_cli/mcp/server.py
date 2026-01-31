@@ -68,9 +68,6 @@ class MCPServer:
         
         # Initialize FastMCP app
         self._app = FastMCP("Spec Kitty MCP Server")
-        
-        # Register all MCP tools
-        self._register_tools()
     
     def _check_port_available(self, host: str, port: int) -> bool:
         """
@@ -90,20 +87,6 @@ class MCPServer:
         except OSError:
             return False
     
-<<<<<<< HEAD
-=======
-    def _register_tools(self):
-        """Register all MCP tools with the server."""
-        from specify_cli.mcp.tools import workspace_operations
-        
-        # Register workspace operations tool
-        self.register_tool(
-            name="workspace_operations",
-            description="Create and manage git worktrees for work packages",
-            handler=workspace_operations
-        )
-    
->>>>>>> 099-mcp-server-for-conversational-spec-kitty-workflow-WP07
     def start(self):
         """
         Start the MCP server with configured transport.
@@ -160,66 +143,3 @@ class MCPServer:
         # FastMCP uses decorators, but we'll register programmatically
         # This will be expanded in WP02 when implementing actual tools
         self._app.tool(name=name, description=description)(handler)
-    
-    def _register_tools(self):
-        """
-        Register all MCP tools with the FastMCP server.
-        
-        This method imports and registers tool handlers for all supported
-        operations. Tools are registered during server initialization.
-        
-        Tools are organized by domain:
-        - system_operations: Health checks, validation, configuration
-        - feature_operations: Feature workflow operations (specify, plan, tasks, etc.)
-        - task_operations: Task and work package management operations
-        - workspace_operations: Git worktree creation and management
-        """
-        from specify_cli.mcp.tools import (
-            system_operations_handler,
-            feature_operations_handler,
-            register_task_operations_tool,
-            workspace_operations,
-            FEATURE_OPERATIONS_SCHEMA
-        )
-        
-        # System operations tool
-        def system_operations_tool(
-            operation: str,
-            project_path: Optional[str] = None
-        ):
-            """
-            System-level operations: health checks, project validation, mission listing.
-            
-            Operations:
-            - health_check: Return server status, uptime, active projects count
-            - validate_project: Check project structure and required files
-            - list_missions: List available Spec Kitty missions
-            - server_config: Return server configuration (API key redacted)
-            """
-            return system_operations_handler(
-                operation=operation,
-                project_path=project_path,
-                server_instance=self
-            )
-        
-        self._app.tool(name="system_operations")(system_operations_tool)
-        
-        # Register feature operations tool
-        self._app.tool(
-            name="feature_operations",
-            description=(
-                "Execute feature workflow operations (specify, plan, tasks, "
-                "implement, review, accept) for Spec Kitty projects. "
-                "Provides conversational access to the complete feature lifecycle."
-            )
-        )(feature_operations_handler)
-        
-        # Register task operations tool
-        register_task_operations_tool(self._app)
-        
-        # Register workspace operations tool
-        self.register_tool(
-            name="workspace_operations",
-            description="Create and manage git worktrees for work packages",
-            handler=workspace_operations
-        )
