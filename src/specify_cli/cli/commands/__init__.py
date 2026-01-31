@@ -9,6 +9,7 @@ from . import agent as agent_module
 from . import context as context_module
 from . import dashboard as dashboard_module
 from . import implement as implement_module
+from . import mcp as mcp_module
 from . import merge as merge_module
 from . import mission as mission_module
 from . import ops as ops_module
@@ -29,6 +30,7 @@ def register_commands(app: typer.Typer) -> None:
     app.add_typer(context_module.app, name="context")
     app.command()(dashboard_module.dashboard)
     app.command()(implement_module.implement)
+    app.add_typer(mcp_module.app, name="mcp")
     app.command()(merge_module.merge)
     app.add_typer(mission_module.app, name="mission")
     app.add_typer(ops_module.app, name="ops")
