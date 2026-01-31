@@ -1,6 +1,6 @@
 [project]
 name = "spec-kitty-cli"
-version = "0.13.4"
+version = "0.13.9"
 description = "Spec Kitty, a tool for Specification Driven Development (SDD) agentic projects, with kanban and git worktree isolation."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -60,13 +60,15 @@ dependencies = [
     "pydantic>=2.0",
     "packaging>=23.0",
     "psutil>=5.9.0",  # Cross-platform process management for dashboard
+    "fastmcp>=1.0.0,<2.0.0",  # MCP server framework with stdio/SSE support
+    "filelock>=3.0.0",  # Cross-platform pessimistic locking for MCP
 ]
 
 [project.urls]
-Repository = "https://github.com/spec-kitty/spec-kitty"
-Issues = "https://github.com/spec-kitty/spec-kitty/issues"
-Documentation = "https://spec-kitty.github.io/spec-kitty"
-Changelog = "https://github.com/spec-kitty/spec-kitty/blob/main/CHANGELOG.md"
+Repository = "https://github.com/Priivacy-ai/spec-kitty"
+Issues = "https://github.com/Priivacy-ai/spec-kitty/issues"
+Documentation = "https://priivacy-ai.github.io/spec-kitty/"
+Changelog = "https://github.com/Priivacy-ai/spec-kitty/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 test = [
@@ -114,3 +116,8 @@ markers = [
     "platform_linux: Linux-specific tests",
     "requires_symlinks: Tests that need symlink support",
 ]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.0.2"
+pytest-asyncio = "^1.3.0"
+
