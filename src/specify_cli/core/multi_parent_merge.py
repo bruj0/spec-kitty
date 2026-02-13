@@ -21,6 +21,7 @@ Example:
 from __future__ import annotations
 
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -45,6 +46,7 @@ def create_multi_parent_base(
     wp_id: str,
     dependencies: list[str],
     repo_root: Path,
+    target_branch: str | None = None,
 ) -> MergeResult:
     """Create a merge commit combining all dependencies for a work package.
 
@@ -82,6 +84,11 @@ def create_multi_parent_base(
             conflicts=[],
         )
 
+    # Resolve target branch dynamically if not provided
+    if target_branch is None:
+        from specify_cli.core.git_ops import resolve_primary_branch
+        target_branch = resolve_primary_branch(repo_root)
+
     # Sort dependencies for deterministic ordering
     sorted_deps = sorted(dependencies)
 
@@ -99,6 +106,8 @@ def create_multi_parent_base(
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
             if result.returncode != 0:
@@ -109,6 +118,56 @@ def create_multi_parent_base(
                     error=f"Dependency branch {branch} does not exist (implement {dep} first)",
                     conflicts=[],
                 )
+
+        # Step 1.5: Check if each dependency branch has unique commits
+        # (Warn if branch is empty - may indicate incomplete work)
+        for dep, branch in zip(sorted_deps, dep_branches):
+            try:
+                # Get merge-base between dep branch and main (WITH TIMEOUT)
+                merge_base_result = subprocess.run(
+                    ["git", "merge-base", branch, target_branch],
+                    cwd=repo_root,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                    timeout=10,  # 10 second timeout
+                )
+
+                if merge_base_result.returncode == 0:
+                    merge_base = merge_base_result.stdout.strip()
+
+                    # Get branch tip (WITH TIMEOUT)
+                    branch_tip_result = subprocess.run(
+                        ["git", "rev-parse", branch],
+                        cwd=repo_root,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        check=False,
+                        timeout=10,  # 10 second timeout
+                    )
+
+                    if branch_tip_result.returncode == 0:
+                        branch_tip = branch_tip_result.stdout.strip()
+
+                        # If merge-base == branch tip, branch has no unique commits
+                        if merge_base == branch_tip:
+                            # Bug #1 Fix: Write to stderr to avoid corrupting JSON output
+                            print(f"⚠️  Warning: Dependency branch '{branch}' has no commits beyond {target_branch}", file=sys.stderr)
+                            print(f"   This may indicate incomplete work or uncommitted changes", file=sys.stderr)
+                            print(f"   The merge-base will not include any work from this branch\n", file=sys.stderr)
+
+            except subprocess.TimeoutExpired:
+                # Git command took too long - skip this check
+                print(f"⚠️  Warning: Timeout checking dependency branch '{branch}' (git taking >10s)", file=sys.stderr)
+                continue
+            except Exception as e:
+                # Unexpected error - log and continue
+                print(f"⚠️  Warning: Error checking dependency branch '{branch}': {e}", file=sys.stderr)
+                continue
 
         # Step 2: Check if temp branch already exists (cleanup from previous run)
         result = subprocess.run(
@@ -133,6 +192,8 @@ def create_multi_parent_base(
             cwd=repo_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         if result.returncode != 0:
@@ -150,6 +211,8 @@ def create_multi_parent_base(
             cwd=repo_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         if result.returncode != 0:
@@ -170,6 +233,8 @@ def create_multi_parent_base(
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
 
@@ -180,6 +245,8 @@ def create_multi_parent_base(
                     cwd=repo_root,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     check=False,
                 )
                 if conflict_result.returncode == 0 and conflict_result.stdout.strip():
@@ -221,6 +288,8 @@ def create_multi_parent_base(
             cwd=repo_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         if result.returncode != 0:

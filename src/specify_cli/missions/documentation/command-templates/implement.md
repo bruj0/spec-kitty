@@ -26,6 +26,15 @@ pwd
 # Should show: /path/to/repo/.worktrees/###-feature-WP##/
 ```
 
+<details><summary>PowerShell equivalent</summary>
+
+```powershell
+Get-Location
+# Should show: C:\path\to\repo\.worktrees\###-feature-WP##\
+```
+
+</details>
+
 ---
 
 ## User Input
@@ -59,6 +68,13 @@ Documentation implementation follows the standard workspace-per-WP model:
    ```bash
    mkdir -p docs/{tutorials,how-to,reference/api,explanation}
    ```
+   <details><summary>PowerShell equivalent</summary>
+
+   ```powershell
+   'tutorials','how-to','reference\api','explanation' | ForEach-Object { New-Item -ItemType Directory -Force -Path "docs\$_" }
+   ```
+
+   </details>
 2. Create index.md landing page:
    ```markdown
    # {Project Name} Documentation
@@ -301,6 +317,44 @@ Documentation implementation follows the standard workspace-per-WP model:
 - Add descriptive alt text
 - Define technical terms
 - Validate before considering complete
+
+---
+
+## Commit Workflow
+
+**BEFORE moving to for_review**, you MUST commit your documentation:
+
+```bash
+cd .worktrees/###-feature-WP##/
+git add docs/
+git commit -m "docs(WP##): <describe your documentation>"
+```
+
+<details><summary>PowerShell equivalent</summary>
+
+```powershell
+Set-Location .worktrees\###-feature-WP##\
+git add docs/
+git commit -m "docs(WP##): <describe your documentation>"
+```
+
+</details>
+
+**Example commit messages:**
+- `docs(WP01): Add Divio structure and generator configs`
+- `docs(WP02): Add getting started tutorial`
+- `docs(WP05): Add API reference documentation`
+
+**Then move to review:**
+```bash
+spec-kitty agent tasks move-task WP## --to for_review --note "Ready for review: <summary>"
+```
+
+**Why this matters:**
+- `move-task` validates that your worktree has commits beyond main
+- Uncommitted changes will block the move to for_review
+- This prevents lost work and ensures reviewers see complete documentation
+- Dependent WPs will receive your work through the git merge-base
 
 ---
 

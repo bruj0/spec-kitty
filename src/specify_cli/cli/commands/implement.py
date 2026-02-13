@@ -23,6 +23,7 @@ from specify_cli.core.vcs import (
     VCSLockError,
 )
 from specify_cli.frontmatter import read_frontmatter, update_fields
+from specify_cli.git import safe_commit
 from specify_cli.tasks_support import (
     TaskCliError,
     find_repo_root,
@@ -33,12 +34,19 @@ from specify_cli.tasks_support import (
 from specify_cli.workspace_context import WorkspaceContext, save_context
 from specify_cli.core.multi_parent_merge import create_multi_parent_base
 from specify_cli.core.context_validation import require_main_repo
+from specify_cli.core.feature_detection import (
+    detect_feature,
+    FeatureDetectionError,
+)
 
 console = Console()
 
 
 def detect_feature_context(feature_flag: str | None = None) -> tuple[str, str]:
-    """Detect feature number and slug from current context.
+    """Detect feature number and slug from current context using centralized detection.
+
+    This function now uses the centralized feature detection module
+    to provide deterministic, consistent behavior across all commands.
 
     Args:
         feature_flag: Explicit feature slug from --feature flag (optional)
@@ -50,88 +58,21 @@ def detect_feature_context(feature_flag: str | None = None) -> tuple[str, str]:
     Raises:
         typer.Exit: If feature context cannot be detected
     """
-    # Priority 1: Explicit --feature flag
-    if feature_flag:
-        match = re.match(r'^(\d{3})-(.+)$', feature_flag)
-        if match:
-            number = match.group(1)
-            return number, feature_flag
-        else:
-            console.print(f"[red]Error:[/red] Invalid feature format: {feature_flag}")
-            console.print("Expected format: ###-feature-name (e.g., 001-my-feature)")
-            raise typer.Exit(1)
-
-    # Priority 2: Try git branch
-    result = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=False
-    )
-
-    if result.returncode == 0:
-        branch = result.stdout.strip()
-
-        # Pattern 1: WP branch (###-feature-name-WP##)
-        # Check this FIRST - more specific pattern
-        # Extract feature slug by removing -WP## suffix
-        match = re.match(r'^((\d{3})-.+)-WP\d{2}$', branch)
-        if match:
-            slug = match.group(1)
-            number = match.group(2)
-            return number, slug
-
-        # Pattern 2: Feature branch (###-feature-name)
-        match = re.match(r'^(\d{3})-(.+)$', branch)
-        if match:
-            number = match.group(1)
-            slug = branch
-            return number, slug
-
-    # Try current directory
-    cwd = Path.cwd()
-    # Look for kitty-specs/###-feature-name/ in path
-    for part in cwd.parts:
-        match = re.match(r'^(\d{3})-(.+)$', part)
-        if match:
-            number = match.group(1)
-            slug = part
-            return number, slug
-
-    # Try scanning kitty-specs/ for features (v0.11.0 workflow)
     try:
         repo_root = find_repo_root()
-        kitty_specs = repo_root / "kitty-specs"
-        if kitty_specs.exists():
-            # Find all feature directories
-            features = [
-                d.name for d in kitty_specs.iterdir()
-                if d.is_dir() and re.match(r'^\d{3}-', d.name)
-            ]
-
-            if len(features) == 1:
-                # Only one feature - use it automatically
-                match = re.match(r'^(\d{3})-(.+)$', features[0])
-                if match:
-                    number = match.group(1)
-                    slug = features[0]
-                    return number, slug
-            elif len(features) > 1:
-                # Multiple features - need user to specify
-                console.print("[red]Error:[/red] Multiple features found:")
-                for f in sorted(features):
-                    console.print(f"  - {f}")
-                console.print("\nSpecify feature explicitly:")
-                console.print("  spec-kitty implement WP01 --feature 001-my-feature")
-                raise typer.Exit(1)
+        ctx = detect_feature(
+            repo_root,
+            explicit_feature=feature_flag,
+            cwd=Path.cwd(),
+            mode="strict"
+        )
+        return ctx.number, ctx.slug
     except TaskCliError:
-        # Not in a git repo, continue to generic error
-        pass
-
-    # Cannot detect
-    console.print("[red]Error:[/red] Cannot detect feature context")
-    console.print("Run this command from a feature branch or feature directory")
-    raise typer.Exit(1)
+        console.print("[red]Error:[/red] Not in a spec-kitty project")
+        raise typer.Exit(1)
+    except FeatureDetectionError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
 
 
 def find_wp_file(repo_root: Path, feature_slug: str, wp_id: str) -> Path:
@@ -227,6 +168,8 @@ def check_base_branch_changed(workspace_path: Path, base_branch: str) -> bool:
             cwd=workspace_path,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         if result.returncode != 0:
@@ -241,6 +184,8 @@ def check_base_branch_changed(workspace_path: Path, base_branch: str) -> bool:
             cwd=workspace_path,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         if result.returncode != 0:
@@ -257,26 +202,15 @@ def check_base_branch_changed(workspace_path: Path, base_branch: str) -> bool:
 
 
 def resolve_primary_branch(repo_root: Path) -> str:
-    """Resolve the primary branch name (main or master).
+    """Resolve the primary branch name (main, master, etc.).
+
+    Delegates to the centralized implementation in core.git_ops.
 
     Returns:
-        "main" if it exists, otherwise "master" if it exists.
-
-    Raises:
-        typer.Exit: If neither branch exists.
+        Detected primary branch name.
     """
-    for candidate in ("main", "master"):
-        result = subprocess.run(
-            ["git", "rev-parse", "--verify", candidate],
-            cwd=repo_root,
-            capture_output=True,
-            check=False,
-        )
-        if result.returncode == 0:
-            return candidate
-
-    console.print("[red]Error:[/red] Neither 'main' nor 'master' branch exists.")
-    raise typer.Exit(1)
+    from specify_cli.core.git_ops import resolve_primary_branch as _resolve
+    return _resolve(repo_root)
 
 
 def display_rebase_warning(
@@ -384,6 +318,8 @@ def _ensure_planning_artifacts_committed_git(
         cwd=repo_root,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False
     )
     current_branch = result.stdout.strip() if result.returncode == 0 else ""
@@ -394,6 +330,8 @@ def _ensure_planning_artifacts_committed_git(
         cwd=repo_root,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False
     )
 
@@ -433,6 +371,8 @@ def _ensure_planning_artifacts_committed_git(
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False
             )
             if result.returncode != 0:
@@ -447,6 +387,8 @@ def _ensure_planning_artifacts_committed_git(
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False
             )
             if result.returncode != 0:
@@ -497,6 +439,8 @@ def _ensure_planning_artifacts_committed_jj(
         cwd=repo_root,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False
     )
     current_bookmark = result.stdout.strip() if result.returncode == 0 else "unknown"
@@ -564,12 +508,13 @@ def implement(
     wp_id: str = typer.Argument(..., help="Work package ID (e.g., WP01)"),
     base: str = typer.Option(None, "--base", help="Base WP to branch from (e.g., WP01)"),
     feature: str = typer.Option(None, "--feature", help="Feature slug (e.g., 001-my-feature)"),
+    force: bool = typer.Option(False, "--force", help="Force auto-merge even when dependencies are done"),
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ) -> None:
     """Create workspace for work package implementation.
 
     Creates a git worktree for the specified work package, branching from
-    main (for WPs with no dependencies) or from a base WP's branch.
+    the feature's target branch (for WPs with no dependencies) or from a base WP's branch.
 
     Examples:
         # Create workspace for WP01 (no dependencies)
@@ -577,6 +522,9 @@ def implement(
 
         # Create workspace for WP02, branching from WP01
         spec-kitty implement WP02 --base WP01
+
+        # Force auto-merge when all multi-parent dependencies are done
+        spec-kitty implement WP06 --force
 
         # Explicit feature specification
         spec-kitty implement WP01 --feature 001-my-feature
@@ -612,22 +560,38 @@ def implement(
 
         # Multi-parent dependency handling
         if len(declared_deps) > 1 and base is None:
+            # Check if all dependencies are done - suggest merge-first workflow
+            from specify_cli.core.dependency_resolver import check_dependency_status
+
+            feature_dir = repo_root / "kitty-specs" / feature_slug
+            dep_status = check_dependency_status(feature_dir, wp_id, declared_deps)
+
+            if dep_status.should_suggest_merge_first and not force:
+                # All dependencies done - suggest merging to main first
+                tracker.error("validate", "dependencies should be merged first")
+                console.print(tracker.render())
+                console.print(f"\n[yellow]Suggestion:[/yellow] {dep_status.get_recommendation()}")
+                raise typer.Exit(1)
+
             # Auto-merge mode: Create merge commit combining all dependencies
             console.print(f"\n[cyan]Multi-parent dependency detected:[/cyan]")
             console.print(f"  {wp_id} depends on: {', '.join(declared_deps)}")
-            console.print(f"  Auto-creating merge base combining all dependencies...")
+
+            if dep_status.all_done:
+                console.print(f"  [yellow]Warning:[/yellow] All dependencies done - merge conflicts likely")
+                console.print(f"  Attempting auto-merge (use merge command for safer workflow)...")
+            else:
+                console.print(f"  Auto-creating merge base combining all dependencies...")
+
             auto_merge_base = True
             # Will create merge base after validation completes
 
-        # Single dependency handling
+        # Single dependency handling - auto-detect base
         elif len(declared_deps) == 1 and base is None:
-            # Suggest base for single dependency
-            tracker.error("validate", "missing --base flag")
-            console.print(tracker.render())
-            console.print(f"\n[red]Error:[/red] {wp_id} depends on {declared_deps[0]}")
-            console.print(f"\nSpecify base workspace:")
-            console.print(f"  spec-kitty implement {wp_id} --base {declared_deps[0]}")
-            raise typer.Exit(1)
+            # Auto-use the single dependency as base (no need to make user specify it!)
+            base = declared_deps[0]
+            console.print(f"\n[cyan]Auto-detected:[/cyan] {wp_id} depends on {base}")
+            console.print(f"Using --base {base} automatically")
 
         # If --base provided, validate it matches declared dependencies
         if base:
@@ -636,27 +600,63 @@ def implement(
                 console.print(f"Declared dependencies: {declared_deps}")
                 # Allow but warn (user might know better than parser)
 
-            # Validate base workspace exists
-            base_workspace = repo_root / ".worktrees" / f"{feature_slug}-{base}"
-            if not base_workspace.exists():
-                tracker.error("validate", f"base workspace {base} not found")
+            # Check if base is merged (ADR-18: Auto-detect merged dependencies)
+            try:
+                base_wp = locate_work_package(repo_root, feature_slug, base)
+                base_lane = base_wp.lane or "planned"
+            except Exception:
+                # Base WP file not found - error
+                tracker.error("validate", f"base WP {base} not found")
                 console.print(tracker.render())
-                console.print(f"\n[red]Error:[/red] Base workspace {base} does not exist")
-                console.print(f"Implement {base} first: spec-kitty implement {base}")
+                console.print(f"\n[red]Error:[/red] Base work package {base} does not exist")
+                console.print(f"Feature: {feature_slug}")
                 raise typer.Exit(1)
 
-            # Verify it's a valid worktree
-            result = subprocess.run(
-                ["git", "rev-parse", "--git-dir"],
-                cwd=base_workspace,
-                capture_output=True,
-                check=False
-            )
-            if result.returncode != 0:
-                tracker.error("validate", f"base workspace {base} invalid")
-                console.print(tracker.render())
-                console.print(f"[red]Error:[/red] {base_workspace} exists but is not a valid worktree")
-                raise typer.Exit(1)
+            if base_lane == "done":
+                # Base is done (review complete) but NOT merged to target yet.
+                # Merging happens at feature level via `spec-kitty merge`.
+                # The WP's branch should still exist even if worktree was cleaned up.
+                base_branch_name = f"{feature_slug}-{base}"
+                result = subprocess.run(
+                    ["git", "rev-parse", "--verify", base_branch_name],
+                    cwd=repo_root,
+                    capture_output=True,
+                    check=False
+                )
+                if result.returncode != 0:
+                    tracker.error("validate", f"base branch {base_branch_name} not found")
+                    console.print(tracker.render())
+                    console.print(f"\n[red]Error:[/red] Branch {base_branch_name} does not exist")
+                    console.print(f"Status: {base} is 'done' but its branch was not found")
+                    console.print(f"\nPossible causes:")
+                    console.print(f"  - {base} was already merged and branch deleted")
+                    console.print(f"  - Branch was manually deleted")
+                    raise typer.Exit(1)
+            else:
+                # Base is in-progress - validate workspace exists
+                base_workspace = repo_root / ".worktrees" / f"{feature_slug}-{base}"
+                if not base_workspace.exists():
+                    tracker.error("validate", f"base workspace {base} not found")
+                    console.print(tracker.render())
+                    console.print(f"\n[red]Error:[/red] Base workspace {base} does not exist")
+                    console.print(f"Status: {base} is in '{base_lane}' lane but workspace missing")
+                    console.print(f"\nPossible causes:")
+                    console.print(f"  - Workspace was deleted manually")
+                    console.print(f"  - {base} needs to be implemented first: spec-kitty implement {base}")
+                    raise typer.Exit(1)
+
+                # Verify it's a valid worktree
+                result = subprocess.run(
+                    ["git", "rev-parse", "--git-dir"],
+                    cwd=base_workspace,
+                    capture_output=True,
+                    check=False
+                )
+                if result.returncode != 0:
+                    tracker.error("validate", f"base workspace {base} invalid")
+                    console.print(tracker.render())
+                    console.print(f"[red]Error:[/red] {base_workspace} exists but is not a valid worktree")
+                    raise typer.Exit(1)
 
         tracker.complete("validate", f"Base: {base or 'main'}")
     except (FileNotFoundError, typer.Exit) as exc:
@@ -749,7 +749,20 @@ def implement(
 
         # Determine base branch
         if auto_merge_base:
-            # Multi-parent: Create merge base combining all dependencies
+            # Check if all dependencies are done first (optimization)
+            from specify_cli.core.dependency_resolver import check_dependency_status
+
+            dep_status = check_dependency_status(feature_dir, wp_id, declared_deps)
+
+            if dep_status.all_done:
+                # All done (review complete) - still need to merge their branches.
+                # "done" does NOT mean "merged to target" - merging happens at
+                # feature level via `spec-kitty merge`.
+                deps_str = ", ".join(declared_deps)
+                console.print(f"\n[cyan]→ All dependencies ({deps_str}) are done[/cyan]")
+                console.print(f"[cyan]→ Creating merge base from their branches...[/cyan]")
+
+            # Create merge base combining dependency branches (whether in-progress or done)
             merge_result = create_multi_parent_base(
                 feature_slug=feature_slug,
                 wp_id=wp_id,
@@ -767,7 +780,18 @@ def implement(
                     console.print(f"\n[yellow]Conflicts in:[/yellow]")
                     for conflict_file in merge_result.conflicts:
                         console.print(f"  - {conflict_file}")
-                    console.print(f"\n[dim]Resolve conflicts manually, then re-run implement[/dim]")
+
+                console.print(f"\n[yellow]Recovery options:[/yellow]")
+                console.print("1. Pick a dependency as the base, then merge the others in the worktree:")
+                console.print(f"   spec-kitty implement {wp_id} --base <WPxx>")
+                console.print(f"   cd .worktrees/{feature_slug}-{wp_id}")
+                console.print(f"   git merge {feature_slug}-<WPy>")
+                console.print("   # Resolve conflicts, then commit")
+                console.print("2. If you're using agent workflow:")
+                console.print(f"   spec-kitty agent workflow implement {wp_id} --base <WPxx> --agent <name>")
+                console.print("   # Then merge other dependency branches in the worktree")
+                console.print("\n[dim]Note:[/dim] There is no `spec-kitty agent workflow merge` command.")
+                console.print("      Feature merges use: spec-kitty agent feature merge")
 
                 raise typer.Exit(1)
 
@@ -775,38 +799,68 @@ def implement(
             base_branch = merge_result.branch_name
 
         elif base is None:
-            # No dependencies - branch from primary branch
-            base_branch = resolve_primary_branch(repo_root)
-        else:
-            # Has dependencies - branch from base WP's branch
-            base_branch = f"{feature_slug}-{base}"
+            # No dependencies - branch from current branch (respects user context)
+            from specify_cli.core.git_ops import get_current_branch
 
-            # Validate base branch/workspace exists
-            base_workspace_path = repo_root / ".worktrees" / f"{feature_slug}-{base}"
-            base_workspace_info = vcs.get_workspace_info(base_workspace_path)
-            if base_workspace_info is None:
-                tracker.error("create", f"base workspace {base} not found")
+            # Get user's current branch
+            current_branch_name = get_current_branch(repo_root)
+            if current_branch_name is None:
+                raise RuntimeError("Could not determine current branch")
+
+            # Use current branch as base (no auto-checkout to target)
+            base_branch = current_branch_name
+        else:
+            # Has dependencies - check if base is merged or in-progress
+            try:
+                base_wp = locate_work_package(repo_root, feature_slug, base)
+                base_lane = base_wp.lane or "planned"
+            except Exception as e:
+                # Base WP file not found
+                tracker.error("create", f"base WP {base} not found")
                 console.print(tracker.render())
-                console.print(f"[red]Error:[/red] Base workspace {base} does not exist")
-                console.print(f"Implement {base} first: spec-kitty implement {base}")
+                console.print(f"[red]Error:[/red] Base work package {base} does not exist")
+                console.print(f"Feature: {feature_slug}")
                 raise typer.Exit(1)
 
-            # Use the base workspace's current branch for git, or the revision for jj
-            if vcs_backend == VCSBackend.GIT:
-                if base_workspace_info.current_branch:
-                    base_branch = base_workspace_info.current_branch
-                # For git, verify the branch exists
-                result = subprocess.run(
-                    ["git", "rev-parse", "--verify", base_branch],
-                    cwd=repo_root,
-                    capture_output=True,
-                    check=False
-                )
-                if result.returncode != 0:
-                    tracker.error("create", f"base branch {base_branch} not found")
+            if base_lane == "done":
+                # Base is done (review complete) - branch from its WP branch.
+                # "done" does NOT mean "merged to target" - merging happens at
+                # feature level via `spec-kitty merge`.
+                base_branch = f"{feature_slug}-{base}"
+                console.print(f"\n[cyan]→ Base {base} is done - branching from {base_branch}[/cyan]")
+            else:
+                # Base in progress - use workspace branch
+                base_branch = f"{feature_slug}-{base}"
+                base_workspace_path = repo_root / ".worktrees" / f"{feature_slug}-{base}"
+                base_workspace_info = vcs.get_workspace_info(base_workspace_path)
+
+                if base_workspace_info is None:
+                    # Error with improved message showing status mismatch
+                    tracker.error("create", f"base workspace {base} not found")
                     console.print(tracker.render())
-                    console.print(f"[red]Error:[/red] Base branch {base_branch} does not exist")
+                    console.print(f"[red]Error:[/red] Base workspace {base} does not exist")
+                    console.print(f"Status: {base} is in '{base_lane}' lane but workspace missing")
+                    console.print(f"\nPossible causes:")
+                    console.print(f"  - Workspace was deleted manually")
+                    console.print(f"  - {base} needs to be implemented first: spec-kitty implement {base}")
                     raise typer.Exit(1)
+
+                # Use the base workspace's current branch for git, or the revision for jj
+                if vcs_backend == VCSBackend.GIT:
+                    if base_workspace_info.current_branch:
+                        base_branch = base_workspace_info.current_branch
+                    # For git, verify the branch exists
+                    result = subprocess.run(
+                        ["git", "rev-parse", "--verify", base_branch],
+                        cwd=repo_root,
+                        capture_output=True,
+                        check=False
+                    )
+                    if result.returncode != 0:
+                        tracker.error("create", f"base branch {base_branch} not found")
+                        console.print(tracker.render())
+                        console.print(f"[red]Error:[/red] Base branch {base_branch} does not exist")
+                        raise typer.Exit(1)
 
         # Create workspace using VCS abstraction
         # For git: sparse_exclude excludes kitty-specs/ from worktree
@@ -845,6 +899,8 @@ def implement(
             cwd=repo_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False
         )
         base_commit_sha = result.stdout.strip() if result.returncode == 0 else "unknown"
@@ -895,7 +951,7 @@ def implement(
         console.print(tracker.render())
         raise
 
-    # Step 4: Update WP lane to "doing" and auto-commit to main
+    # Step 4: Update WP lane to "doing" and auto-commit to target branch
     # This enables multi-agent synchronization - all agents see the claim immediately
     try:
         import os
@@ -912,27 +968,40 @@ def implement(
             updated_front = set_scalar(wp.frontmatter, "lane", "doing")
             updated_front = set_scalar(updated_front, "shell_pid", shell_pid)
 
-            # Build and write updated document
+            # Build updated document (write after ensuring target branch)
             updated_doc = build_document(updated_front, wp.body, wp.padding)
+
+            # Auto-commit to current branch (respects user context, no auto-checkout)
+            from specify_cli.core.git_ops import resolve_target_branch
+            commit_msg = f"chore: {wp_id} claimed for implementation"
+
+            # Resolve branch routing (unified logic, no auto-checkout)
+            resolution = resolve_target_branch(feature_slug, repo_root, respect_current=True)
+
+            # Show notification if user is on different branch than target
+            if resolution.should_notify:
+                console.print(
+                    f"[yellow]Note:[/yellow] You are on '{resolution.current}', "
+                    f"feature targets '{resolution.target}'. "
+                    f"Status will commit to '{resolution.current}'."
+                )
+
+            # Commit to current branch (no checkout)
             wp.path.write_text(updated_doc, encoding="utf-8")
 
-            # Auto-commit to main branch
-            commit_msg = f"chore: {wp_id} claimed for implementation"
-            commit_result = subprocess.run(
-                ["git", "commit", str(wp.path.resolve()), "-m", commit_msg],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=False
+            # Commit only the WP file (safe_commit preserves staging area)
+            commit_success = safe_commit(
+                repo_path=repo_root,
+                files_to_commit=[wp.path.resolve()],
+                commit_message=commit_msg,
+                allow_empty=True,  # OK if nothing changed
             )
 
-            if commit_result.returncode == 0:
-                console.print(f"[cyan]→ {wp_id} moved to 'doing' (committed to main)[/cyan]")
+            if commit_success:
+                console.print(f"[cyan]→ {wp_id} moved to 'doing' (committed to {resolution.current})[/cyan]")
             else:
                 # Commit failed - file might be unchanged or other issue
                 console.print(f"[yellow]Warning:[/yellow] Could not auto-commit lane change")
-                if commit_result.stderr:
-                    console.print(f"  {commit_result.stderr.strip()}")
 
     except Exception as e:
         # Non-fatal: workspace created but lane update failed
@@ -947,7 +1016,7 @@ def implement(
             "branch": branch_name,
             "feature": feature_slug,
             "wp_id": wp_id,
-            "base": base or "main",
+            "base": base or resolve_primary_branch(repo_root),
             "status": "created"
         }))
     else:

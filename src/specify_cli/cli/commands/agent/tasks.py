@@ -14,8 +14,26 @@ from rich.console import Console
 from typing_extensions import Annotated
 
 from specify_cli.core.dependency_graph import build_dependency_graph, get_dependents
-from specify_cli.core.paths import locate_project_root, get_main_repo_root, find_feature_slug, is_worktree_context
+from specify_cli.core.paths import locate_project_root, get_main_repo_root, is_worktree_context
+from specify_cli.core.feature_detection import (
+    detect_feature_slug,
+    get_feature_target_branch,
+    FeatureDetectionError,
+)
 from specify_cli.mission import get_feature_mission_key
+from specify_cli.git import safe_commit
+
+
+def resolve_primary_branch(repo_root: Path) -> str:
+    """Resolve the primary branch name (main, master, etc.).
+
+    Delegates to the centralized implementation in core.git_ops.
+
+    Returns:
+        Detected primary branch name.
+    """
+    from specify_cli.core.git_ops import resolve_primary_branch as _resolve
+    return _resolve(repo_root)
 from specify_cli.tasks_support import (
     LANES,
     WorkPackage,
@@ -38,8 +56,47 @@ app = typer.Typer(
 console = Console()
 
 
-def _find_feature_slug() -> str:
-    """Find the current feature slug from the working directory or git branch.
+def _ensure_target_branch_checked_out(
+    repo_root: Path,
+    feature_slug: str,
+    json_output: bool,
+) -> tuple[Path, str]:
+    """Resolve branch context without auto-checkout (respects user's current branch).
+
+    Returns:
+        (main_repo_root, current_branch)
+    """
+    from specify_cli.core.git_ops import resolve_target_branch
+
+    from specify_cli.core.git_ops import get_current_branch
+
+    main_repo_root = get_main_repo_root(repo_root)
+
+    # Check for detached HEAD
+    current_branch = get_current_branch(main_repo_root)
+    if current_branch is None:
+        raise RuntimeError("Planning repo is in detached HEAD state; checkout a branch before continuing")
+
+    # Resolve branch routing (unified logic, no auto-checkout)
+    resolution = resolve_target_branch(feature_slug, main_repo_root, current_branch, respect_current=True)
+
+    # Show notification if branches differ
+    if resolution.should_notify and not json_output:
+        console.print(
+            f"[yellow]Note:[/yellow] You are on '{resolution.current}', "
+            f"feature targets '{resolution.target}'. "
+            f"Operations will use '{resolution.current}'."
+        )
+
+    # Return current branch (no checkout performed)
+    return main_repo_root, resolution.current
+
+
+def _find_feature_slug(explicit_feature: str | None = None) -> str:
+    """Find the current feature slug using centralized detection.
+
+    Args:
+        explicit_feature: Optional explicit feature slug from --feature flag
 
     Returns:
         Feature slug (e.g., "008-unified-python-cli")
@@ -53,11 +110,16 @@ def _find_feature_slug() -> str:
     if repo_root is None:
         raise typer.Exit(1)
 
-    slug = find_feature_slug(repo_root)
-    if slug is None:
+    try:
+        return detect_feature_slug(
+            repo_root,
+            explicit_feature=explicit_feature,
+            cwd=cwd,
+            mode="strict"
+        )
+    except FeatureDetectionError as e:
+        console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
-
-    return slug
 
 
 def _output_result(json_mode: bool, data: dict, success_message: str = None):
@@ -107,7 +169,7 @@ def _check_unchecked_subtasks(
     Raises:
         typer.Exit: If unchecked tasks found and force=False
     """
-    # Use main repo (worktrees have kitty-specs/ sparse-checked out)
+    # Use planning repo root (worktrees have kitty-specs/ sparse-checked out)
     main_repo_root = get_main_repo_root(repo_root)
     feature_dir = main_repo_root / "kitty-specs" / feature_slug
     tasks_md = feature_dir / "tasks.md"
@@ -167,7 +229,7 @@ def _check_dependent_warnings(
     if json_mode:
         return
 
-    # Use main repo (worktrees have kitty-specs/ sparse-checked out)
+    # Use planning repo root (worktrees have kitty-specs/ sparse-checked out)
     main_repo_root = get_main_repo_root(repo_root)
     feature_dir = main_repo_root / "kitty-specs" / feature_slug
 
@@ -223,7 +285,7 @@ def _validate_ready_for_review(
 ) -> Tuple[bool, List[str]]:
     """Validate that WP is ready for review by checking for uncommitted changes.
 
-    For research missions: Checks for uncommitted research artifacts in main repo.
+    For research missions: Checks for uncommitted research artifacts in planning repo.
     For software-dev missions: Checks for uncommitted changes in worktree AND
     verifies at least one implementation commit exists.
 
@@ -248,13 +310,15 @@ def _validate_ready_for_review(
     # Detect mission type from feature's meta.json
     mission_key = get_feature_mission_key(feature_dir)
 
-    # Check 1: Uncommitted research artifacts in main repo (applies to ALL missions)
-    # Research artifacts live in kitty-specs/ which is in main, not worktrees
+    # Check 1: Uncommitted research artifacts in planning repo (applies to ALL missions)
+    # Research artifacts live in kitty-specs/ which is in the planning repo, not worktrees
     result = subprocess.run(
         ["git", "status", "--porcelain", str(feature_dir)],
         cwd=main_repo_root,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False
     )
     uncommitted_in_main = result.stdout.strip()
@@ -274,7 +338,7 @@ def _validate_ready_for_review(
             research_files.append(line)
 
         if research_files:
-            guidance.append("Uncommitted research outputs detected in main repo!")
+            guidance.append("Uncommitted research outputs detected in planning repo!")
             guidance.append("")
             guidance.append("Modified files in kitty-specs/:")
             for line in research_files[:5]:  # Show first 5 files
@@ -299,14 +363,9 @@ def _validate_ready_for_review(
 
         if worktree_path.exists():
             # Check for detached HEAD before other git status checks
-            result = subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=worktree_path,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            if result.returncode == 0 and result.stdout.strip() == "HEAD":
+            from specify_cli.core.git_ops import get_current_branch
+            wt_branch = get_current_branch(worktree_path)
+            if wt_branch is None:
                 guidance.append("Detached HEAD detected in worktree!")
                 guidance.append("")
                 guidance.append("Please reattach to a branch before review:")
@@ -329,6 +388,8 @@ def _validate_ready_for_review(
                     cwd=worktree_path,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     check=False
                 )
                 if state_result.returncode == 0:
@@ -349,12 +410,24 @@ def _validate_ready_for_review(
                 guidance.append(f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review")
                 return False, guidance
 
-            # Check if worktree branch is behind main
+            # Check if worktree branch is behind its base branch
+            # For stacked WPs (WP03 based on WP01), check against WP01's branch, not main
+            from specify_cli.core.feature_detection import get_feature_target_branch
+            from specify_cli.workspace_context import load_context
+            target_branch = get_feature_target_branch(repo_root, feature_slug)
+
+            # Resolve actual base: workspace context tracks the real base branch
+            workspace_name = f"{feature_slug}-{wp_id}"
+            ws_context = load_context(main_repo_root, workspace_name)
+            check_branch = ws_context.base_branch if ws_context else target_branch
+
             result = subprocess.run(
-                ["git", "rev-list", "--count", "HEAD..main"],
+                ["git", "rev-list", "--count", f"HEAD..{check_branch}"],
                 cwd=worktree_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False
             )
             behind_count = 0
@@ -365,12 +438,12 @@ def _validate_ready_for_review(
                     behind_count = 0
 
             if behind_count > 0:
-                guidance.append("Main branch has new commits not in this worktree!")
+                guidance.append(f"{check_branch} branch has new commits not in this worktree!")
                 guidance.append("")
-                guidance.append(f"Your branch is behind main by {behind_count} commit(s).")
+                guidance.append(f"Your branch is behind {check_branch} by {behind_count} commit(s).")
                 guidance.append("Rebase before review:")
                 guidance.append(f"  cd {worktree_path}")
-                guidance.append("  git rebase main")
+                guidance.append(f"  git rebase {check_branch}")
                 guidance.append("")
                 guidance.append(f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review")
                 return False, guidance
@@ -381,6 +454,8 @@ def _validate_ready_for_review(
                 cwd=worktree_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False
             )
             uncommitted_in_worktree = result.stdout.strip()
@@ -419,12 +494,14 @@ def _validate_ready_for_review(
                 guidance.append(f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review")
                 return False, guidance
 
-            # Check if branch has commits beyond base (main)
+            # Check if branch has commits beyond base (use actual base, not target)
             result = subprocess.run(
-                ["git", "rev-list", "--count", "main..HEAD"],
+                ["git", "rev-list", "--count", f"{check_branch}..HEAD"],
                 cwd=worktree_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False
             )
             commit_count = 0
@@ -437,7 +514,7 @@ def _validate_ready_for_review(
             if commit_count == 0:
                 guidance.append("No implementation commits on WP branch!")
                 guidance.append("")
-                guidance.append("The worktree exists but has no commits beyond main.")
+                guidance.append(f"The worktree exists but has no commits beyond {check_branch}.")
                 guidance.append("Either:")
                 guidance.append("  1. Commit your implementation work to the worktree")
                 guidance.append("  2. Or verify work is complete (use --force if nothing to commit)")
@@ -464,7 +541,7 @@ def move_task(
     review_feedback_file: Annotated[Optional[Path], typer.Option("--review-feedback-file", help="Path to review feedback file (required when moving to planned from review)")] = None,
     reviewer: Annotated[Optional[str], typer.Option("--reviewer", help="Reviewer name (auto-detected from git if omitted)")] = None,
     force: Annotated[bool, typer.Option("--force", help="Force move even with unchecked subtasks or missing feedback")] = False,
-    auto_commit: Annotated[bool, typer.Option("--auto-commit/--no-auto-commit", help="Automatically commit WP file changes to main branch")] = True,
+    auto_commit: Annotated[bool, typer.Option("--auto-commit/--no-auto-commit", help="Automatically commit WP file changes to target branch")] = True,
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON format")] = False,
 ) -> None:
     """Move task between lanes (planned → doing → for_review → done).
@@ -485,13 +562,15 @@ def move_task(
             _output_error(json_output, "Could not locate project root")
             raise typer.Exit(1)
 
-        feature_slug = feature or _find_feature_slug()
+        feature_slug = _find_feature_slug(explicit_feature=feature)
 
-        # Informational: Let user know we're using main repo's kitty-specs
+        # Ensure we operate on the target branch for this feature
+        main_repo_root, target_branch = _ensure_target_branch_checked_out(repo_root, feature_slug, json_output)
+
+        # Informational: Let user know we're using planning repo's kitty-specs
         cwd = Path.cwd().resolve()
         if is_worktree_context(cwd) and not json_output:
-            main_root = get_main_repo_root(repo_root)
-            if cwd != main_root:
+            if cwd != main_repo_root:
                 # Check if worktree has its own kitty-specs (stale copy)
                 worktree_kitty = None
                 current = cwd
@@ -503,7 +582,7 @@ def move_task(
 
                 if worktree_kitty and (worktree_kitty / feature_slug / "tasks").exists():
                     console.print(
-                        f"[dim]Note: Using main repo's kitty-specs/ (worktree copy ignored)[/dim]"
+                        f"[dim]Note: Using planning repo's kitty-specs/ on {target_branch} (worktree copy ignored)[/dim]"
                     )
 
         # Load work package first (needed for current_lane check)
@@ -551,12 +630,12 @@ def move_task(
                 _output_error(json_output, error_msg)
                 raise typer.Exit(1)
 
-        # Validate uncommitted changes when moving to for_review
-        # This catches the bug where agents edit research artifacts but forget to commit
-        if target_lane == "for_review":
+        # Validate uncommitted changes when moving to for_review OR done
+        # This catches the bug where agents edit artifacts but forget to commit
+        if target_lane in ("for_review", "done"):
             is_valid, guidance = _validate_ready_for_review(repo_root, feature_slug, task_id, force)
             if not is_valid:
-                error_msg = f"Cannot move {task_id} to for_review\n\n"
+                error_msg = f"Cannot move {task_id} to {target_lane}\n\n"
                 error_msg += "\n".join(guidance)
                 if not force:
                     error_msg += "\n\nOr use --force to override (not recommended)"
@@ -592,6 +671,8 @@ def move_task(
                         ["git", "config", "user.name"],
                         capture_output=True,
                         text=True,
+                        encoding="utf-8",
+                        errors="replace",
                         check=True
                     )
                     reviewer = result.stdout.strip() or "unknown"
@@ -629,6 +710,8 @@ def move_task(
                         ["git", "config", "user.name"],
                         capture_output=True,
                         text=True,
+                        encoding="utf-8",
+                        errors="replace",
                         check=True
                     )
                     reviewer = result.stdout.strip() or "unknown"
@@ -650,70 +733,55 @@ def move_task(
         # Add history entry to body
         updated_body = append_activity_log(updated_body, history_entry)
 
-        # Build and write updated document
+        # Build updated document (but don't write yet if auto-commit enabled)
         updated_doc = build_document(updated_front, updated_body, wp.padding)
-        wp.path.write_text(updated_doc, encoding="utf-8")
 
-        # FIX B: Auto-commit to main branch (worktrees use sparse-checkout, don't have kitty-specs/)
-        # Agents read/write to main's kitty-specs/ directly (absolute paths)
-        # This enables instant status sync across all worktrees (jujutsu-aligned)
+        file_written = False
         if auto_commit:
             import subprocess
-
-            # Get the ACTUAL main repo root (not worktree path)
-            main_repo_root = get_main_repo_root(repo_root)
 
             # Extract spec number from feature_slug (e.g., "014" from "014-feature-name")
             spec_number = feature_slug.split('-')[0] if '-' in feature_slug else feature_slug
 
-            # Commit to main (file is always in main, worktrees excluded via sparse-checkout)
+            # Commit to target branch (file is always in planning repo, worktrees excluded via sparse-checkout)
             commit_msg = f"chore: Move {task_id} to {target_lane} on spec {spec_number}"
             if agent_name != "unknown":
                 commit_msg += f" [{agent_name}]"
 
             try:
-                # wp.path already points to main's kitty-specs/ (absolute path)
-                # Worktrees use sparse-checkout to exclude kitty-specs/, so path is always to main
+                # wp.path already points to planning repo's kitty-specs/ (absolute path)
+                # Worktrees use sparse-checkout to exclude kitty-specs/, so path is always to planning repo
                 actual_file_path = wp.path.resolve()
 
-                # Stage the file first, then commit
-                # Use -u to only update tracked files (bypasses .gitignore check)
-                add_result = subprocess.run(
-                    ["git", "add", "-u", str(actual_file_path)],
-                    cwd=main_repo_root,
-                    capture_output=True,
-                    text=True,
-                    check=False
+                # Write file AFTER ensuring target branch
+                wp.path.write_text(updated_doc, encoding="utf-8")
+                file_written = True
+
+                # Commit only the WP file (preserves staging area)
+                commit_success = safe_commit(
+                    repo_path=main_repo_root,
+                    files_to_commit=[actual_file_path],
+                    commit_message=commit_msg,
+                    allow_empty=True,  # OK if nothing changed
                 )
 
-                if add_result.returncode != 0:
+                if commit_success:
                     if not json_output:
-                        console.print(f"[yellow]Warning:[/yellow] Failed to stage file: {add_result.stderr}")
+                        console.print(f"[cyan]→ Committed status change to {target_branch} branch[/cyan]")
                 else:
-                    # Commit the staged file
-                    commit_result = subprocess.run(
-                        ["git", "commit", "-m", commit_msg],
-                        cwd=main_repo_root,
-                        capture_output=True,
-                        text=True,
-                        check=False
-                    )
-
-                    if commit_result.returncode == 0:
-                        if not json_output:
-                            console.print(f"[cyan]→ Committed status change to main branch[/cyan]")
-                    elif "nothing to commit" in commit_result.stdout or "nothing to commit" in commit_result.stderr:
-                        # File wasn't actually changed, that's OK
-                        pass
-                    else:
-                        # Commit failed
-                        if not json_output:
-                            console.print(f"[yellow]Warning:[/yellow] Failed to auto-commit: {commit_result.stderr}")
+                    # Commit failed (safe_commit returned False)
+                    if not json_output:
+                        console.print(f"[yellow]Warning:[/yellow] Failed to auto-commit status change")
 
             except Exception as e:
-                # Unexpected error
+                # Unexpected error (e.g., not in a git repo) - ensure file gets written
+                if not file_written:
+                    wp.path.write_text(updated_doc, encoding="utf-8")
                 if not json_output:
-                    console.print(f"[yellow]Warning:[/yellow] Auto-commit exception: {e}")
+                    console.print(f"[yellow]Warning:[/yellow] Auto-commit skipped: {e}")
+        else:
+            # No auto-commit - just write the file
+            wp.path.write_text(updated_doc, encoding="utf-8")
 
         # Output result
         result = {
@@ -743,7 +811,7 @@ def mark_status(
     task_ids: Annotated[list[str], typer.Argument(help="Task ID(s) - space-separated (e.g., T001 T002 T003)")],
     status: Annotated[str, typer.Option("--status", help="Status: done/pending")],
     feature: Annotated[Optional[str], typer.Option("--feature", help="Feature slug (auto-detected if omitted)")] = None,
-    auto_commit: Annotated[bool, typer.Option("--auto-commit/--no-auto-commit", help="Automatically commit tasks.md changes to main branch")] = True,
+    auto_commit: Annotated[bool, typer.Option("--auto-commit/--no-auto-commit", help="Automatically commit tasks.md changes to target branch")] = True,
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON format")] = False,
 ) -> None:
     """Update task checkbox status in tasks.md for one or more tasks.
@@ -781,9 +849,9 @@ def mark_status(
             _output_error(json_output, "Could not locate project root")
             raise typer.Exit(1)
 
-        feature_slug = feature or _find_feature_slug()
-        # Use main repo root (worktrees have kitty-specs/ sparse-checked out)
-        main_repo_root = get_main_repo_root(repo_root)
+        feature_slug = _find_feature_slug(explicit_feature=feature)
+        # Ensure we operate on the target branch for this feature
+        main_repo_root, target_branch = _ensure_target_branch_checked_out(repo_root, feature_slug, json_output)
         feature_dir = main_repo_root / "kitty-specs" / feature_slug
         tasks_md = feature_dir / "tasks.md"
 
@@ -824,7 +892,7 @@ def mark_status(
         updated_content = '\n'.join(lines)
         tasks_md.write_text(updated_content, encoding="utf-8")
 
-        # Auto-commit to main branch (single commit for all tasks)
+        # Auto-commit to TARGET branch (detects from feature meta.json)
         if auto_commit:
             import subprocess
 
@@ -840,35 +908,20 @@ def mark_status(
             try:
                 actual_tasks_path = tasks_md.resolve()
 
-                # Stage the file first, then commit
-                # Use -u to only update tracked files (bypasses .gitignore check)
-                add_result = subprocess.run(
-                    ["git", "add", "-u", str(actual_tasks_path)],
-                    cwd=main_repo_root,
-                    capture_output=True,
-                    text=True,
-                    check=False
+                # Commit only the tasks.md file (preserves staging area)
+                commit_success = safe_commit(
+                    repo_path=main_repo_root,
+                    files_to_commit=[actual_tasks_path],
+                    commit_message=commit_msg,
+                    allow_empty=True,  # OK if nothing changed
                 )
 
-                if add_result.returncode != 0:
+                if commit_success:
                     if not json_output:
-                        console.print(f"[yellow]Warning:[/yellow] Failed to stage file: {add_result.stderr}")
+                        console.print(f"[cyan]→ Committed subtask changes to {target_branch} branch[/cyan]")
                 else:
-                    # Commit the staged file
-                    commit_result = subprocess.run(
-                        ["git", "commit", "-m", commit_msg],
-                        cwd=main_repo_root,
-                        capture_output=True,
-                        text=True,
-                        check=False
-                    )
-
-                    if commit_result.returncode == 0:
-                        if not json_output:
-                            console.print(f"[cyan]→ Committed subtask changes to main branch[/cyan]")
-                    elif "nothing to commit" not in commit_result.stdout and "nothing to commit" not in commit_result.stderr:
-                        if not json_output:
-                            console.print(f"[yellow]Warning:[/yellow] Failed to auto-commit: {commit_result.stderr}")
+                    if not json_output:
+                        console.print(f"[yellow]Warning:[/yellow] Failed to auto-commit subtask changes")
 
             except Exception as e:
                 if not json_output:
@@ -918,10 +971,10 @@ def list_tasks(
             _output_error(json_output, "Could not locate project root")
             raise typer.Exit(1)
 
-        feature_slug = feature or _find_feature_slug()
+        feature_slug = _find_feature_slug(explicit_feature=feature)
 
-        # Use main repo (worktrees have kitty-specs/ sparse-checked out)
-        main_repo_root = get_main_repo_root(repo_root)
+        # Ensure we operate on the target branch for this feature
+        main_repo_root, _ = _ensure_target_branch_checked_out(repo_root, feature_slug, json_output)
 
         # Find all task files
         tasks_dir = main_repo_root / "kitty-specs" / feature_slug / "tasks"
@@ -991,7 +1044,10 @@ def add_history(
             _output_error(json_output, "Could not locate project root")
             raise typer.Exit(1)
 
-        feature_slug = feature or _find_feature_slug()
+        feature_slug = _find_feature_slug(explicit_feature=feature)
+
+        # Ensure we operate on the target branch for this feature
+        _ensure_target_branch_checked_out(repo_root, feature_slug, json_output)
 
         # Load work package
         wp = locate_work_package(repo_root, feature_slug, task_id)
@@ -1053,9 +1109,9 @@ def finalize_tasks(
             _output_error(json_output, "Could not locate project root")
             raise typer.Exit(1)
 
-        feature_slug = feature or _find_feature_slug()
-        # Use main repo (worktrees have kitty-specs/ sparse-checked out)
-        main_repo_root = get_main_repo_root(repo_root)
+        feature_slug = _find_feature_slug(explicit_feature=feature)
+        # Ensure we operate on the target branch for this feature
+        main_repo_root, _ = _ensure_target_branch_checked_out(repo_root, feature_slug, json_output)
         feature_dir = main_repo_root / "kitty-specs" / feature_slug
         tasks_md = feature_dir / "tasks.md"
         tasks_dir = feature_dir / "tasks"
@@ -1170,7 +1226,10 @@ def validate_workflow(
             _output_error(json_output, "Could not locate project root")
             raise typer.Exit(1)
 
-        feature_slug = feature or _find_feature_slug()
+        feature_slug = _find_feature_slug(explicit_feature=feature)
+
+        # Ensure we operate on the target branch for this feature
+        _ensure_target_branch_checked_out(repo_root, feature_slug, json_output)
 
         # Load work package
         wp = locate_work_package(repo_root, feature_slug, task_id)
@@ -1272,10 +1331,10 @@ def status(
             raise typer.Exit(1)
 
         # Auto-detect or use provided feature slug
-        feature_slug = feature if feature else _find_feature_slug()
+        feature_slug = _find_feature_slug(explicit_feature=feature)
 
-        # Get main repo root for correct path resolution
-        main_repo_root = get_main_repo_root(repo_root)
+        # Ensure we operate on the target branch for this feature
+        main_repo_root, _ = _ensure_target_branch_checked_out(repo_root, feature_slug, json_output)
 
         # Locate feature directory
         feature_dir = main_repo_root / "kitty-specs" / feature_slug
@@ -1527,8 +1586,8 @@ def list_dependents(
             _output_error(json_output, "Could not locate project root")
             raise typer.Exit(1)
 
-        feature_slug = feature or _find_feature_slug()
-        main_repo_root = get_main_repo_root(repo_root)
+        feature_slug = _find_feature_slug(explicit_feature=feature)
+        main_repo_root, _ = _ensure_target_branch_checked_out(repo_root, feature_slug, json_output)
         feature_dir = main_repo_root / "kitty-specs" / feature_slug
 
         if not feature_dir.exists():
